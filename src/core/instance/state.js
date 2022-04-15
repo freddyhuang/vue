@@ -29,13 +29,15 @@ import {
   invokeWithErrorHandling
 } from '../util/index'
 
+// 描述符对象 (数据属性，也可以是访问器属性)
 const sharedPropertyDefinition = {
-  enumerable: true,
-  configurable: true,
+  enumerable: true, // 表示能否通过for in循环访问属性，默认值为true
+  configurable: true,// configurable:表示能否通过delete删除属性从而重新定义属性，能否修改属性的特性，或者能否把属性修改为访问器属性，默认值为true。
   get: noop,
   set: noop
 }
 
+// 设置代理，将 key 代理到 target 上
 export function proxy (target: Object, sourceKey: string, key: string) {
   sharedPropertyDefinition.get = function proxyGetter () {
     return this[sourceKey][key]
@@ -43,30 +45,70 @@ export function proxy (target: Object, sourceKey: string, key: string) {
   sharedPropertyDefinition.set = function proxySetter (val) {
     this[sourceKey][key] = val
   }
-  Object.defineProperty(target, key, sharedPropertyDefinition)
+  Object.defineProperty(target, key, sharedPropertyDefinition) // 三个参数值 属性所在的对象  属性的名字   一个描述符对象
 }
 
+/**
+*两件事：
+ 数据响应式的入口：分别处理 props、methods、data、computed 、 watch;
+ 优先级：props、methods、data、computed 对象中的属性不能出现重复，优先级和列出顺序一致
+ *  其中 computed 中的 key 不能和 props、data 中的 key 重复，methods 不影响
+*
+*/
 export function initState (vm: Component) {
   vm._watchers = []
   const opts = vm.$options
+
+  // 处理props对象 ，为 props 对象的每个属性设置响应式，并将其代理到 vm 实例上
   if (opts.props) initProps(vm, opts.props)
+
+  // 处理 methos 对象，校验每个属性的值是否为函数、和 props 属性比对进行判重处理，最后得到 vm[key] = methods[key]
   if (opts.methods) initMethods(vm, opts.methods)
+
+  /**
+   * 做了三件事
+   *   1、判重处理，data 对象上的属性不能和 props、methods 对象上的属性相同
+   *   2、代理 data 对象上的属性到 vm 实例
+   *   3、为 data 对象的上数据设置响应式
+   */
   if (opts.data) {
     initData(vm)
   } else {
     observe(vm._data = {}, true /* asRootData */)
   }
+
+  /**
+  * 三件事：
+  *   1、为 computed[key] 创建 watcher 实例，默认是懒执行
+  *   2、代理 computed[key] 到 vm 实例
+  *   3、判重，computed 中的 key 不能和 data、props 中的属性重复
+  */
   if (opts.computed) initComputed(vm, opts.computed)
+
+  /**
+  * 三件事：
+  *   1、处理 watch 对象
+  *   2、为 每个 watch.key 创建 watcher 实例，key 和 watcher 实例可能是 一对多 的关系
+  *   3、如果设置了 immediate，则立即执行 回调函数
+  */
   if (opts.watch && opts.watch !== nativeWatch) {
     initWatch(vm, opts.watch)
   }
+  /**
+   * 其实到这里也能看出，computed 和 watch 在本质是没有区别的，都是通过 watcher 去实现的响应式
+   * 非要说有区别，那也只是在使用方式上的区别，简单来说：
+   *   1、watch：适用于当数据变化时执行异步或者开销较大的操作时使用，即需要长时间等待的操作可以放在 watch 中
+   *   2、computed：其中可以使用异步方法，但是没有任何意义。所以 computed 更适合做一些同步计算
+   */
 }
 
+// 处理 props 对象，为 props 对象的每个属性设置响应式，并将其代理到 vm 实例上
 function initProps (vm: Component, propsOptions: Object) {
   const propsData = vm.$options.propsData || {}
   const props = vm._props = {}
   // cache prop keys so that future props updates can iterate using Array
   // instead of dynamic object key enumeration.
+  // 缓存 props 的每个 key，性能优化
   const keys = vm.$options._propKeys = []
   const isRoot = !vm.$parent
   // root instance props should be converted
@@ -75,36 +117,18 @@ function initProps (vm: Component, propsOptions: Object) {
   }
   for (const key in propsOptions) {
     keys.push(key)
+
+    // 获取 props[key] 的默认值
     const value = validateProp(key, propsOptions, propsData, vm)
-    /* istanbul ignore else */
-    if (process.env.NODE_ENV !== 'production') {
-      const hyphenatedKey = hyphenate(key)
-      if (isReservedAttribute(hyphenatedKey) ||
-          config.isReservedAttr(hyphenatedKey)) {
-        warn(
-          `"${hyphenatedKey}" is a reserved attribute and cannot be used as component prop.`,
-          vm
-        )
-      }
-      defineReactive(props, key, value, () => {
-        if (!isRoot && !isUpdatingChildComponent) {
-          warn(
-            `Avoid mutating a prop directly since the value will be ` +
-            `overwritten whenever the parent component re-renders. ` +
-            `Instead, use a data or computed property based on the prop's ` +
-            `value. Prop being mutated: "${key}"`,
-            vm
-          )
-        }
-      })
-    } else {
+
+      // 为 props 的每个 key 是设置数据响应式
       defineReactive(props, key, value)
     }
     // static props are already proxied on the component's prototype
     // during Vue.extend(). We only need to proxy props defined at
     // instantiation here.
     if (!(key in vm)) {
-      proxy(vm, `_props`, key)
+      proxy(vm, `_props`, key)  // 代理 key 到 vm 对象上
     }
   }
   toggleObserving(true)
