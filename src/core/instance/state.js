@@ -134,7 +134,14 @@ function initProps (vm: Component, propsOptions: Object) {
   toggleObserving(true)
 }
 
+/**
+ * 做了三件事
+ *   1、判重处理，data 对象上的属性不能和 props、methods 对象上的属性相同
+ *   2、代理 data 对象上的属性到 vm 实例
+ *   3、为 data 对象的上数据设置响应式
+ */
 function initData (vm: Component) {
+  // 得到 data 对象
   let data = vm.$options.data
   data = vm._data = typeof data === 'function'
     ? getData(data, vm)
@@ -148,6 +155,11 @@ function initData (vm: Component) {
     )
   }
   // proxy data on instance
+  /**
+   * 两件事
+   *   1、判重处理，data 对象上的属性不能和 props、methods 对象上的属性相同
+   *   2、代理 data 对象上的属性到 vm 实例
+   */
   const keys = Object.keys(data)
   const props = vm.$options.props
   const methods = vm.$options.methods
@@ -173,6 +185,7 @@ function initData (vm: Component) {
     }
   }
   // observe data
+  // 为 data 对象上的数据设置响应式
   observe(data, true /* asRootData */)
 }
 
@@ -191,12 +204,19 @@ export function getData (data: Function, vm: Component): any {
 
 const computedWatcherOptions = { lazy: true }
 
+/**
+ * 三件事：
+ *   1、为 computed[key] 创建 watcher 实例，默认是懒执行
+ *   2、代理 computed[key] 到 vm 实例
+ *   3、判重，computed 中的 key 不能和 data、props 中的属性重复
+ */
 function initComputed (vm: Component, computed: Object) {
   // $flow-disable-line
   const watchers = vm._computedWatchers = Object.create(null)
   // computed properties are just getters during SSR
   const isSSR = isServerRendering()
 
+// 遍历 computed 对象
   for (const key in computed) {
     const userDef = computed[key]
     const getter = typeof userDef === 'function' ? userDef : userDef.get
@@ -209,10 +229,12 @@ function initComputed (vm: Component, computed: Object) {
 
     if (!isSSR) {
       // create internal watcher for the computed property.
+      // 为 computed 属性创建 watcher 实例
       watchers[key] = new Watcher(
         vm,
         getter || noop,
         noop,
+        // 配置项，computed 默认是懒执行
         computedWatcherOptions
       )
     }
@@ -220,7 +242,10 @@ function initComputed (vm: Component, computed: Object) {
     // component-defined computed properties are already defined on the
     // component prototype. We only need to define computed properties defined
     // at instantiation here.
+
     if (!(key in vm)) {
+      // 代理 computed 对象中的属性到 vm 实例
+      // 这样就可以使用 vm.computedKey 访问计算属性了
       defineComputed(vm, key, userDef)
     } else if (process.env.NODE_ENV !== 'production') {
       if (key in vm.$data) {
@@ -234,12 +259,16 @@ function initComputed (vm: Component, computed: Object) {
   }
 }
 
+/**
+ * 代理 computed 对象中的 key 到 target（vm）上
+ */
 export function defineComputed (
   target: any,
   key: string,
   userDef: Object | Function
 ) {
   const shouldCache = !isServerRendering()
+   // 构造属性描述符(get、set)
   if (typeof userDef === 'function') {
     sharedPropertyDefinition.get = shouldCache
       ? createComputedGetter(key)
@@ -262,13 +291,31 @@ export function defineComputed (
       )
     }
   }
+  // 拦截对 target.key 的访问和设置
   Object.defineProperty(target, key, sharedPropertyDefinition)
 }
 
+/**
+ * @returns 返回一个函数，这个函数在访问 vm.computedProperty 时会被执行，然后返回执行结果
+ */
 function createComputedGetter (key) {
+  // computed 属性值会缓存的原理也是在这里结合 watcher.dirty、watcher.evalaute、watcher.update 实现的
   return function computedGetter () {
+     // 得到当前 key 对应的 watcher
     const watcher = this._computedWatchers && this._computedWatchers[key]
     if (watcher) {
+       // 计算 key 对应的值，通过执行 computed.key 的回调函数来得到
+      // watcher.dirty 属性就是大家常说的 computed 计算结果会缓存的原理
+      // <template>
+     //   <div>{{ computedProperty }}</div>
+     //   <div>{{ computedProperty }}</div>
+     // </template>
+     // 像这种情况下，在页面的一次渲染中，两个 dom 中的 computedProperty 只有第一个
+     // 会执行 computed.computedProperty 的回调函数计算实际的值，
+     // 即执行 watcher.evalaute，而第二个就不走计算过程了，
+     // 因为上一次执行 watcher.evalute 时把 watcher.dirty 置为了 false，
+     // 待页面更新后，wathcer.update 方法会将 watcher.dirty 重新置为 true，
+     // 供下次页面更新时重新计算 computed.key 的结果
       if (watcher.dirty) {
         watcher.evaluate()
       }
@@ -280,14 +327,28 @@ function createComputedGetter (key) {
   }
 }
 
+/**
+ * 功能同 createComputedGetter 一样
+ */
 function createGetterInvoker(fn) {
   return function computedGetter () {
     return fn.call(this, this)
   }
 }
 
+/**
+ * 做了以下三件事，其实最关键的就是第三件事情
+ *   1、校验 methoss[key]，必须是一个函数
+ *   2、判重
+ *         methods 中的 key 不能和 props 中的 key 相同
+ *         methos 中的 key 与 Vue 实例上已有的方法重叠，一般是一些内置方法，比如以 $ 和 _ 开头的方法
+ *   3、将 methods[key] 放到 vm 实例上，得到 vm[key] = methods[key]
+ */
 function initMethods (vm: Component, methods: Object) {
+  // 获取 props 配置项
   const props = vm.$options.props
+
+  // 遍历 methods 对象
   for (const key in methods) {
     if (process.env.NODE_ENV !== 'production') {
       if (typeof methods[key] !== 'function') {
@@ -314,10 +375,18 @@ function initMethods (vm: Component, methods: Object) {
   }
 }
 
+/**
+ * 处理 watch 对象的入口，做了两件事：
+ *   1、遍历 watch 对象
+ *   2、调用 createWatcher 函数
+ * }
+ */
 function initWatch (vm: Component, watch: Object) {
+  // 遍历 watch 对象
   for (const key in watch) {
     const handler = watch[key]
     if (Array.isArray(handler)) {
+      // handler 为数组，遍历数组，获取其中的每一项，然后调用 createWatcher
       for (let i = 0; i < handler.length; i++) {
         createWatcher(vm, key, handler[i])
       }
@@ -327,16 +396,23 @@ function initWatch (vm: Component, watch: Object) {
   }
 }
 
+/**
+ * 两件事：
+ *   1、兼容性处理，保证 handler 肯定是一个函数
+ *   2、调用 $watch
+ */
 function createWatcher (
   vm: Component,
   expOrFn: string | Function,
   handler: any,
   options?: Object
 ) {
+   // 如果 handler 为对象，则获取其中的 handler 选项的值
   if (isPlainObject(handler)) {
     options = handler
     handler = handler.handler
   }
+  // 如果 hander 为字符串，则说明是一个 methods 方法，获取 vm[handler]
   if (typeof handler === 'string') {
     handler = vm[handler]
   }
